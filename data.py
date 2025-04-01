@@ -10,13 +10,6 @@ import pandas as pd
 import ta
 from statsmodels.tsa.seasonal import seasonal_decompose
 
-# Setup application base and download paths
-APP_BASE_PATH = os.getenv("APP_BASE_PATH", default=os.getcwd())
-DOWNLOAD_PATH = os.path.join(APP_BASE_PATH, "data")
-if not os.path.exists(DOWNLOAD_PATH):
-    os.mkdir(DOWNLOAD_PATH)
-
-
 class DataFetcher:
     """
     Class to fetch and process cryptocurrency data from the Tiingo API.
@@ -73,12 +66,12 @@ class DataFetcher:
 
         return number, unit
 
-    def tiingo_crypto_data(self, TimeFrame=5, volatility_parameters=None):
+    def tiingo_crypto_data(self, prediction_horizon=5, volatility_parameters=None):
         """
         Fetch cryptocurrency data from Tiingo API and compute technical indicators.
 
         Parameters:
-            TimeFrame (int): Prediction lag in minutes; determines return intervals.
+            prediction_horizon (int): Prediction lag in minutes; determines return intervals.
             volatility_parameters (dict): Parameters for volatility calculation. Should include:
                 - 'volatility_granularity' (str): Granularity for volatility calculation (e.g., "1min").
                 - 'standardized' (bool): Whether to standardize volatility data.
@@ -113,7 +106,7 @@ class DataFetcher:
 
         # Construct the granularity string for the API request
         granularity_str = f"{VG_number}{G_unit}"
-        window = int(TimeFrame / VG_number)  # Window length for rolling calculations
+        window = int(prediction_horizon / VG_number)  # Window length for rolling calculations
 
         BASE_APIURL = "https://api.tiingo.com"
         headers = {
@@ -169,7 +162,7 @@ class DataFetcher:
             df = pd.concat([temp_df, df]).sort_index()
             df = df[~df.index.duplicated(keep='first')]
 
-        # Rename index for clarity and convert index to datetime and 
+        # Rename index for clarity and convert index to datetime and
         df.index = pd.to_datetime(df.index)
         df.index.name = 'datetime'
         # Reindex DataFrame to ensure consistent timestamps
@@ -188,21 +181,21 @@ class DataFetcher:
             df["volatility_half"] = df["close"].rolling(window=max(1, int(window / 2))).std() * standard_factor
             df["volatility_quartet"] = df["close"].rolling(window=max(1, int(window / 4))).std() * standard_factor
 
-        # Adjust aggregation to match the time frame
+        # Adjust aggregation to match the prediction horizon
         df[["volume", "volumeNotional", "tradesDone"]] = df[["volume", "volumeNotional", "tradesDone"]].rolling(window=window).sum()
         df["high"] = df["high"].rolling(window=window).max()
         df["low"] = df["low"].rolling(window=window).min()
 
         # Filter rows to ensure indices align with the expected granularity (assumes G_unit in minutes)
         df = df[(df.index.minute % G_number == 0) & (df.index.second == 0)]
-
         # Compute technical analysis indicators using the `ta` library
         df['Bollinger_High'] = ta.volatility.bollinger_hband(df['close'], window=20)
         df['Bollinger_Low'] = ta.volatility.bollinger_lband(df['close'], window=20)
         df['RSI_10'] = ta.momentum.rsi(df['close'], window=10)
         df['RSI_100'] = ta.momentum.rsi(df['close'], window=100)
         df['MACD'] = ta.trend.macd(df['close'])
-        df['ATR'] = ta.volatility.average_true_range(df['high'], df['low'], df['close'], window=14) / df['close']
+        if int(prediction_horizon/G_number) <= 14: # If long prediction horizon and short granularities are used, errors will occur
+          df['ATR'] = ta.volatility.average_true_range(df['high'], df['low'], df['close'], window=14) / df['close']
         df['KST'] = ta.trend.kst(df['close'])
         df['OBV'] = ta.volume.on_balance_volume(df['close'], df['volume'])
         df['SMA_20'] = ta.trend.sma_indicator(df['close'], window=20)
@@ -220,7 +213,8 @@ class DataFetcher:
         # Calculate returns and adjusted returns based on the defined window
         df["return_open"] = df["open"]
         df["return"] = df["close"]
-        cols = ["return_open", "return", "volume", "SMA_20", "EMA_20"]
+        df["log_volume"] = df["volume"]
+        cols = ["return_open", "return", "log_volume", "SMA_20", "EMA_20"]
         df[cols] = np.log(df[cols] / df[cols].shift(window))
         df["open-close_return"] = df["return_open"] - df["return"]
 
@@ -232,7 +226,7 @@ class DataFetcher:
         df.dropna(inplace=True)
 
         # Add seasonality features via decomposition
-        decomposition = seasonal_decompose(df["return"], period=144, model="additive", extrapolate_trend="freq")
+        decomposition = seasonal_decompose(df["return"], period=72, model="additive", extrapolate_trend="freq")
         df["seasonal_decomposition"] = decomposition.seasonal
 
         # Generate cyclic time features based on time of day

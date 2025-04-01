@@ -3,16 +3,23 @@
 A script to fetch and process cryptocurrency data from the Tiingo API.
 
 Attributes:
-    tiingo_api_key (str): API key for Tiingo.
-    symbol (str): Cryptocurrency symbol to fetch (default "ETHUSD").
-    granularity (str): Time granularity for data points (e.g., "5min").
-    start_date (datetime): Start date for the data.
-    end_date (datetime): End date for the data (default: current UTC time).
-    prediction_horizon (int): Prediction lag in minutes; determines return intervals.
-    volatility_parameters (dict): Parameters for volatility calculation. Should include:
-        - 'volatility_granularity' (str): Granularity for volatility calculation (e.g., "1min").
-        - 'standardized' (bool): Whether to standardize volatility data.
 
+-tiingo_api_key (str): API key for Tiingo.
+
+-symbol (str): Cryptocurrency symbol to fetch (default "ETHUSD").
+
+-granularity (str): Time granularity for data points (e.g., "5min").
+
+-start_date (datetime): Start date for the data.
+
+-end_date (datetime): End date for the data (default: current UTC time).
+
+-prediction_horizon (int): Prediction lag in minutes; determines return intervals.
+
+-volatility_parameters (dict): Parameters for volatility calculation. Should include:
+- 'volatility_granularity' (str): Granularity for volatility calculation (e.g., "1min").
+-  'standardized' (bool): Whether to standardize volatility data.
+ 
 
  Process Overview:
   1. Extract time components from granularity and (if provided) volatility granularity.

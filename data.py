@@ -10,6 +10,7 @@ import pandas as pd
 import ta
 from statsmodels.tsa.seasonal import seasonal_decompose
 
+
 class DataFetcher:
     """
     Class to fetch and process cryptocurrency data from the Tiingo API.
@@ -185,7 +186,7 @@ class DataFetcher:
         df[["volume", "volumeNotional", "tradesDone"]] = df[["volume", "volumeNotional", "tradesDone"]].rolling(window=window).sum()
         df["high"] = df["high"].rolling(window=window).max()
         df["low"] = df["low"].rolling(window=window).min()
-
+        df["open"] = df["open"].shift(window-1)
         # Filter rows to ensure indices align with the expected granularity (assumes G_unit in minutes)
         df = df[(df.index.minute % G_number == 0) & (df.index.second == 0)]
         # Compute technical analysis indicators using the `ta` library
@@ -194,7 +195,7 @@ class DataFetcher:
         df['RSI_10'] = ta.momentum.rsi(df['close'], window=10)
         df['RSI_100'] = ta.momentum.rsi(df['close'], window=100)
         df['MACD'] = ta.trend.macd(df['close'])
-        if int(prediction_horizon/G_number) <= 14: # If long prediction horizon and short granularities are used, errors will occur
+        if int(prediction_horizon/G_number) <= 14: # If long prediction horizon and short granularities are used, errors will occer
           df['ATR'] = ta.volatility.average_true_range(df['high'], df['low'], df['close'], window=14) / df['close']
         df['KST'] = ta.trend.kst(df['close'])
         df['OBV'] = ta.volume.on_balance_volume(df['close'], df['volume'])

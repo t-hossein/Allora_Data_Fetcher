@@ -67,7 +67,7 @@ class DataFetcher:
 
         return number, unit
 
-    def tiingo_crypto_data(self, prediction_horizon=5, volatility_parameters=None):
+    def tiingo_crypto_data(self, prediction_horizon=5, volatility_parameters=None, OnlyNow = False):
         """
         Fetch cryptocurrency data from Tiingo API and compute technical indicators.
 
@@ -91,9 +91,19 @@ class DataFetcher:
             8. Compute returns and lagged returns.
             9. Add seasonality features.
         """
+        # Prepare cache file path
+        today_str = datetime.utcnow().strftime("%Y-%m-%d")
+        cache_filename = f"cached_tiingo_{self.symbol}_{self.granularity}_{today_str}.csv"
+
+        # Check for cached file
+        if os.path.exists(cache_filename) and OnlyNow == False:
+            print(f"Loading cached data from {cache_filename}")
+            df = pd.read_csv(cache_filename, index_col='datetime', parse_dates=True)
+            return df
+
         # Validate and extract granularity components
         G_number, G_unit = self.extract_time_components(self.granularity)
-        lags = range(2, 31)  # Lags for computing lagged return features
+        lags = range(2, 11)  # Lags for computing lagged return features
 
         # Setup volatility parameters if provided
         VG_number = G_number
@@ -106,7 +116,10 @@ class DataFetcher:
                 raise Exception("Granularity must be equal or larger than volatility granularity.")
 
         # Construct the granularity string for the API request
-        granularity_str = f"{VG_number}{G_unit}"
+        if G_unit == "day":
+          granularity_str = f"{VG_number/1440}{G_unit}"
+        else:
+          granularity_str = f"{VG_number}{G_unit}"
         window = int(prediction_horizon / VG_number)  # Window length for rolling calculations
 
         BASE_APIURL = "https://api.tiingo.com"
@@ -119,7 +132,9 @@ class DataFetcher:
             "endDate": str(self.end_date),
             "resampleFreq": granularity_str,
         }
+
         url = f"{BASE_APIURL}/tiingo/crypto/prices"
+        #url = f"{BASE_APIURL}/tiingo/fx/prices"
 
         # Initial API request
         try:
@@ -133,7 +148,7 @@ class DataFetcher:
             json_data = response.json()
             # Check if data exists and the key 'priceData' is available
             if not json_data or "priceData" not in json_data[0]:
-                print(f"No crypto data found for {self.symbol}")
+                print(f"No data found for {self.symbol}")
                 return pd.DataFrame()
         except (ValueError, KeyError) as e:
             print(f"Error parsing response data: {e}")
@@ -143,9 +158,11 @@ class DataFetcher:
         df = pd.DataFrame(json_data[0]['priceData'])
         # Set as index
         df.set_index("date", inplace=True)
+        if OnlyNow == True:
+          self.start_date = end_date -timedelta(days=1)
 
         # Ensure the start_date is covered (Tiingo returns a limited number of datapoints)
-        extend_points = window * (max(lags) if lags else 1) + 100 * int(G_number / VG_number)
+        extend_points = window * (max(lags) if lags else 1) + 10 * int(G_number / VG_number)
         # Loop to extend data if the earliest fetched data is later than required start_date
         while  not (df.index[extend_points] <= self.start_date.isoformat() <= df.index[-1]):
             # Update endDate to the earliest timestamp fetched
@@ -201,8 +218,18 @@ class DataFetcher:
         df['OBV'] = ta.volume.on_balance_volume(df['close'], df['volume'])
         df['SMA_20'] = ta.trend.sma_indicator(df['close'], window=20)
         df['SMA_100'] = ta.trend.sma_indicator(df['close'], window=100)
+        df['SMA_200'] = ta.trend.sma_indicator(df['close'], window=200)
+        df['SMA_500'] = ta.trend.sma_indicator(df['close'], window=500)
+        df['SMA_1000'] = ta.trend.sma_indicator(df['close'], window=1000)
         df['EMA_20'] = ta.trend.ema_indicator(df['close'], window=20)
         df["EMA_100"] = ta.trend.ema_indicator(df['close'], window=100)
+        df["EMA_200"] = ta.trend.ema_indicator(df['close'], window=200)
+        df["EMA_500"] = ta.trend.ema_indicator(df['close'], window=500)
+        df["EMA_1000"] = ta.trend.ema_indicator(df['close'], window=1000)
+        df["EMA_1000"] = ta.trend.ema_indicator(df['close'], window=1000)
+        df["EMA_100-10"] = df["EMA_100"] - df["EMA_20"]
+        df["EMA_200-100"] = df["EMA_200"] - df["EMA_100"]
+        df["EMA_100-SMA_100"] = df["EMA_100"] - df["SMA_100"]
         df["std_0.05"] = df["close"].ewm(alpha=0.05).std()
         df["std_0.1"] = df["close"].ewm(alpha=0.1).std()
         df["diff_trend"] = np.log(df["close"]/df['EMA_20'].shift(+1))
@@ -211,14 +238,16 @@ class DataFetcher:
         df["low-open"] = df["low"] - df["open"]
         df["close-open"] = df["close"] - df["open"]
 
+
         # Calculate returns and adjusted returns based on the defined window
+        df["mean"] = df[["close", "high", "low", "open"]].mean(axis=1)
         df["return_open"] = df["open"]
         df["return"] = df["close"]
         df["log_volume"] = df["volume"]
-        cols = ["return_open", "return", "log_volume", "SMA_20", "EMA_20"]
+        cols = ["return_open", "return", "log_volume", "SMA_20", "EMA_20", "mean"]
         df[cols] = np.log(df[cols] / df[cols].shift(window))
         df["open-close_return"] = df["return_open"] - df["return"]
-
+        df["count_pos"] = [sum(1 if j>0 else 0 for j in df[["return", "return_open"]].iloc[i-window*6:i,].values.ravel()) for i in range(len(df))]
         # Compute lagged returns for additional features
         for lag in lags:
             df[f"{lag}_lag_return"] = np.log(df["close"] / df["close"].shift(lag * window))
@@ -228,7 +257,9 @@ class DataFetcher:
 
         # Add seasonality features via decomposition
         decomposition = seasonal_decompose(df["return"], period=72, model="additive", extrapolate_trend="freq")
-        df["seasonal_decomposition"] = decomposition.seasonal
+        df["seasonal_decomposition_72"] = decomposition.seasonal
+        decomposition = seasonal_decompose(df["return"], period=18, model="additive", extrapolate_trend="freq")
+        df["seasonal_decomposition_18"] = decomposition.seasonal
 
         # Generate cyclic time features based on time of day
         df["hour"] = df.index.hour
@@ -242,4 +273,8 @@ class DataFetcher:
 
         # Restrict the final DataFrame to the desired date interval
         df = df.loc[str(self.start_date):str(self.end_date)]
+        # Save the DataFrame for reuse
+        if not os.path.exists(cache_filename):
+            df.to_csv(cache_filename)
+
         return df
